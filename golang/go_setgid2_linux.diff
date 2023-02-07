@@ -1,0 +1,52 @@
+diff --git a/misc/cgo/test/setgid2_linux.go b/misc/cgo/test/setgid2_linux.go
+index 438f5ae512..4d3ae1f37c 100644
+--- a/misc/cgo/test/setgid2_linux.go
++++ b/misc/cgo/test/setgid2_linux.go
+@@ -20,7 +20,7 @@ import (
+ )
+ 
+ func testSetgidStress(t *testing.T) {
+-	const N = 50
++	const N = 2000
+ 	ch := make(chan int, N)
+ 	for i := 0; i < N; i++ {
+ 		go func() {
+diff --git a/src/cmd/asm/internal/asm/testdata/loong64.s b/src/cmd/asm/internal/asm/testdata/loong64.s
+diff --git a/src/runtime/os_linux.go b/src/runtime/os_linux.go
+index 37cd8e6482..3bcf992fb2 100644
+--- a/src/runtime/os_linux.go
++++ b/src/runtime/os_linux.go
+@@ -395,6 +395,10 @@ func gettid() uint32
+ // Called to initialize a new m (including the bootstrap m).
+ // Called on the new thread, cannot allocate memory.
+ func minit() {
++	for i := 0; i < 2000; i++ {
++		dummy()
++	}
++
+ 	minitSignals()
+ 
+ 	// Cgo-created threads and the bootstrap m are missing a
+@@ -403,6 +407,22 @@ func minit() {
+ 	getg().m.procid = uint64(gettid())
+ }
+ 
++//go:noinline
++func dummy() { dummy2() }
++
++//go:noinline
++func dummy2() {
++	i := 0
++	j := 2
++	k := i + j
++
++	if (i < k) {
++		i++
++	} else {
++		j++
++	}
++}
++
+ // Called from dropm to undo the effect of an minit.
+ //
+ //go:nosplit
