@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const chan_nums int = 2000000
+const chan_nums int = 20000000
 
 func Create_threads() {
 	log.Println("Create thread")
@@ -42,5 +42,5 @@ func Create_threads() {
 
 func main() {
 	go Create_threads()
-	log.Fatal(http.ListenAndServe("0.0.0.0:6365", nil))
+	log.Fatal(http.ListenAndServe("0.0.0.0:6366", nil))
 }

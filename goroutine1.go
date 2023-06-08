@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const chan_nums int = 2000000
+const chan_nums int = 20000000
 
 func Create_threads() {
 	log.Println("Create thread")
