@@ -1,0 +1,727 @@
+From c5c66027b0743289fbdec9394dd2feaaff33dd83 Mon Sep 17 00:00:00 2001
+From: Guoqi Chen <chenguoqi@loongson.cn>
+Date: Fri, 26 Apr 2024 18:44:10 +0800
+Subject: [PATCH 3/3] cmd/compiler,internal/runtime/atomic: optimize Cas{64,32}
+ on loong64
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+goos: linux
+goarch: loong64
+pkg: internal/runtime/atomic
+cpu: Loongson-3A5000 @ 2500.00MHz
+         |  bench.old  |  bench.new                         |
+         |  sec/op     |   sec/op      vs base              |
+Cas        50.07n ± 0%   45.64n ± 0%  -8.85% (p=0.000 n=20)
+Cas-2      52.79n ± 0%   50.64n ± 0%  -4.07% (p=0.000 n=20)
+Cas-4      55.97n ± 0%   54.69n ± 0%  -2.29% (p=0.000 n=20)
+Cas64      50.05n ± 0%   45.66n ± 0%  -8.78% (p=0.000 n=20)
+Cas64-2    52.66n ± 0%   50.64n ± 0%  -3.84% (p=0.000 n=20)
+Cas64-4    55.94n ± 0%   54.70n ± 0%  -2.22% (p=0.000 n=20)
+geomean    52.86n        50.19n       -5.05%
+
+goos: linux
+goarch: loong64
+pkg: internal/runtime/atomic
+cpu: Loongson-3A6000-HV @ 2500.00MHz
+         |  bench.old   |  bench.new                         |
+         |  sec/op      |   sec/op      vs base              |
+Cas        46.83n ± 0%    22.82n ± 0%  -51.27% (p=0.000 n=20)
+Cas-2      47.65n ± 0%    29.53n ± 0%  -38.03% (p=0.000 n=20)
+Cas-4      52.19n ± 0%    29.51n ± 0%  -43.46% (p=0.000 n=20)
+Cas64      46.84n ± 0%    22.83n ± 0%  -51.26% (p=0.000 n=20)
+Cas64-2    47.40n ± 0%    29.42n ± 0%  -37.93% (p=0.000 n=20)
+Cas64-4    51.92n ± 0%    29.35n ± 0%  -43.48% (p=0.000 n=20)
+geomean    48.75n         27.05n       -44.51%
+
+Change-Id: I3a9517898c098263a0e48496ee9342a69a9e04f0
+---
+ src/cmd/compile/internal/ir/symtab.go         | 23 +++----
+ src/cmd/compile/internal/loong64/ssa.go       | 53 ++++++++++++++-
+ .../compile/internal/ssa/_gen/LOONG64.rules   |  3 +
+ .../compile/internal/ssa/_gen/LOONG64Ops.go   | 27 ++++++--
+ src/cmd/compile/internal/ssa/opGen.go         | 50 +++++++++++++--
+ .../compile/internal/ssa/rewriteLOONG64.go    | 26 ++++++++
+ src/cmd/compile/internal/ssagen/ssa.go        | 64 +++++++++++++++++--
+ .../internal/typecheck/_builtin/runtime.go    |  1 +
+ src/cmd/compile/internal/typecheck/builtin.go |  1 +
+ src/cmd/internal/goobj/builtinlist.go         |  3 +
+ src/internal/cpu/cpu.go                       |  7 +-
+ src/internal/cpu/cpu_loong64.go               |  3 +
+ src/internal/cpu/cpu_loong64.s                | 12 ++++
+ src/internal/cpu/cpu_loong64_hwcap.go         | 11 ++++
+ src/internal/runtime/atomic/atomic_loong64.go |  9 ++-
+ src/internal/runtime/atomic/atomic_loong64.s  | 49 +++++++++++---
+ src/runtime/cpuflags.go                       |  2 +
+ src/runtime/proc.go                           |  3 +
+ 18 files changed, 303 insertions(+), 44 deletions(-)
+ create mode 100644 src/internal/cpu/cpu_loong64.s
+
+diff --git a/src/cmd/compile/internal/ir/symtab.go b/src/cmd/compile/internal/ir/symtab.go
+index 202c4942de..25d9ce8c34 100644
+--- a/src/cmd/compile/internal/ir/symtab.go
++++ b/src/cmd/compile/internal/ir/symtab.go
+@@ -54,17 +54,18 @@ type symsStruct struct {
+ 	WBZero            *obj.LSym
+ 	WBMove            *obj.LSym
+ 	// Wasm
+-	SigPanic        *obj.LSym
+-	Staticuint64s   *obj.LSym
+-	Typedmemmove    *obj.LSym
+-	Udiv            *obj.LSym
+-	WriteBarrier    *obj.LSym
+-	Zerobase        *obj.LSym
+-	ARM64HasATOMICS *obj.LSym
+-	ARMHasVFPv4     *obj.LSym
+-	X86HasFMA       *obj.LSym
+-	X86HasPOPCNT    *obj.LSym
+-	X86HasSSE41     *obj.LSym
++	SigPanic         *obj.LSym
++	Staticuint64s    *obj.LSym
++	Typedmemmove     *obj.LSym
++	Udiv             *obj.LSym
++	WriteBarrier     *obj.LSym
++	Zerobase         *obj.LSym
++	ARM64HasATOMICS  *obj.LSym
++	ARMHasVFPv4      *obj.LSym
++	LOONG64HasLAMCAS *obj.LSym
++	X86HasFMA        *obj.LSym
++	X86HasPOPCNT     *obj.LSym
++	X86HasSSE41      *obj.LSym
+ 	// Wasm
+ 	WasmDiv *obj.LSym
+ 	// Wasm
+diff --git a/src/cmd/compile/internal/loong64/ssa.go b/src/cmd/compile/internal/loong64/ssa.go
+index 8d1c06cbab..0cb63c0ca0 100644
+--- a/src/cmd/compile/internal/loong64/ssa.go
++++ b/src/cmd/compile/internal/loong64/ssa.go
+@@ -562,13 +562,12 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
+ 
+ 	case ssa.OpLOONG64LoweredAtomicCas32, ssa.OpLOONG64LoweredAtomicCas64:
+ 		// MOVV $0, Rout
+-		// DBAR
+ 		// LL	(Rarg0), Rtmp
+ 		// BNE	Rtmp, Rarg1, 4(PC)
+ 		// MOVV Rarg2, Rout
+ 		// SC	Rout, (Rarg0)
+ 		// BEQ	Rout, -4(PC)
+-		// DBAR
++		// DBAR 0x14
+ 		ll := loong64.ALLV
+ 		sc := loong64.ASCV
+ 		if v.Op == ssa.OpLOONG64LoweredAtomicCas32 {
+@@ -580,7 +579,6 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
+ 		p.From.Reg = loong64.REGZERO
+ 		p.To.Type = obj.TYPE_REG
+ 		p.To.Reg = v.Reg0()
+-		s.Prog(loong64.ADBAR)
+ 		p1 := s.Prog(ll)
+ 		p1.From.Type = obj.TYPE_MEM
+ 		p1.From.Reg = v.Args[0].Reg()
+@@ -607,7 +605,56 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
+ 		p5.To.Type = obj.TYPE_BRANCH
+ 		p5.To.SetTarget(p1)
+ 		p6 := s.Prog(loong64.ADBAR)
++		p6.From.Type = obj.TYPE_CONST
++		p6.From.Offset = 0x14
+ 		p2.To.SetTarget(p6)
++
++	case ssa.OpLOONG64LoweredAtomicCas64Variant, ssa.OpLOONG64LoweredAtomicCas32Variant:
++		// MOVV         $0, Rout
++		// MOVV         Rarg1, Rtmp
++		// AMCASDBx     Rarg2, (Rarg0), Rarg1
++		// BNE          Rarg1, Rtmp, 2(PC)
++		// MOVV         $1, Rout
++		// NOP
++		amcasx := loong64.AAMCASDBV
++		if v.Op == ssa.OpLOONG64LoweredAtomicCas32Variant {
++			amcasx = loong64.AAMCASDBW
++		}
++
++		p := s.Prog(loong64.AMOVV)
++		p.From.Type = obj.TYPE_REG
++		p.From.Reg = loong64.REGZERO
++		p.To.Type = obj.TYPE_REG
++		p.To.Reg = v.Reg0()
++
++		p1 := s.Prog(loong64.AMOVV)
++		p1.From.Type = obj.TYPE_REG
++		p1.From.Reg = v.Args[1].Reg()
++		p1.To.Type = obj.TYPE_REG
++		p1.To.Reg = loong64.REGTMP
++
++		p2 := s.Prog(amcasx)
++		p2.From.Type = obj.TYPE_REG
++		p2.From.Reg = v.Args[2].Reg()
++		p2.To.Type = obj.TYPE_MEM
++		p2.To.Reg = v.Args[0].Reg()
++		p2.RegTo2 = v.Args[1].Reg()
++
++		p3 := s.Prog(loong64.ABNE)
++		p3.From.Type = obj.TYPE_REG
++		p3.From.Reg = v.Args[1].Reg()
++		p3.Reg = loong64.REGTMP
++		p3.To.Type = obj.TYPE_BRANCH
++
++		p4 := s.Prog(loong64.AMOVV)
++		p4.From.Type = obj.TYPE_CONST
++		p4.From.Offset = 0x1
++		p4.To.Type = obj.TYPE_REG
++		p4.To.Reg = v.Reg0()
++
++		p5 := s.Prog(obj.ANOP)
++		p3.To.SetTarget(p5)
++
+ 	case ssa.OpLOONG64LoweredNilCheck:
+ 		// Issue a load which will fault if arg is nil.
+ 		p := s.Prog(loong64.AMOVB)
+diff --git a/src/cmd/compile/internal/ssa/_gen/LOONG64.rules b/src/cmd/compile/internal/ssa/_gen/LOONG64.rules
+index 6e0335ac7d..27e3619b98 100644
+--- a/src/cmd/compile/internal/ssa/_gen/LOONG64.rules
++++ b/src/cmd/compile/internal/ssa/_gen/LOONG64.rules
+@@ -402,6 +402,9 @@
+ 
+ (AtomicAdd(32|64) ...) => (LoweredAtomicAdd(32|64) ...)
+ 
++(AtomicCompareAndSwap32Variant ptr old new mem) => (LoweredAtomicCas32Variant ptr (SignExt32to64 old) new mem)
++(AtomicCompareAndSwap64Variant ...) => (LoweredAtomicCas64Variant ...)
++
+ (AtomicCompareAndSwap32 ptr old new mem) => (LoweredAtomicCas32 ptr (SignExt32to64 old) new mem)
+ (AtomicCompareAndSwap64 ...) => (LoweredAtomicCas64 ...)
+ 
+diff --git a/src/cmd/compile/internal/ssa/_gen/LOONG64Ops.go b/src/cmd/compile/internal/ssa/_gen/LOONG64Ops.go
+index c58d29e141..6bf24b1024 100644
+--- a/src/cmd/compile/internal/ssa/_gen/LOONG64Ops.go
++++ b/src/cmd/compile/internal/ssa/_gen/LOONG64Ops.go
+@@ -139,6 +139,7 @@ func init() {
+ 		// allocating registers, otherwise unexpected results may occur.
+ 		atomicArg0 = buildReg("g SP SB") | buildReg("R4 R5 R6 R7 R8 R9 R10 R11")
+ 		atomicArg1 = buildReg("R12 R13 R14 R15 R16 R17 R18 R19")
++		atomicArg2 = buildReg("R20 R21 R23 R24 R25 R26 R27 R28")
+ 		atomicOut  = gp
+ 	)
+ 	// Common regInfo
+@@ -152,7 +153,7 @@ func init() {
+ 		gpstore0  = regInfo{inputs: []regMask{gpspsbg}}
+ 		amstore   = regInfo{inputs: []regMask{atomicArg0, atomicArg1}}
+ 		amxchg    = regInfo{inputs: []regMask{atomicArg0, atomicArg1}, outputs: []regMask{atomicOut}}
+-		gpcas     = regInfo{inputs: []regMask{gpspsbg, gpg, gpg}, outputs: []regMask{gp}}
++		amcas     = regInfo{inputs: []regMask{atomicArg0, atomicArg1, atomicArg2}, outputs: []regMask{atomicOut}}
+ 		fp01      = regInfo{inputs: nil, outputs: []regMask{fp}}
+ 		fp11      = regInfo{inputs: []regMask{fp}, outputs: []regMask{fp}}
+ 		fp21      = regInfo{inputs: []regMask{fp, fp}, outputs: []regMask{fp}}
+@@ -404,16 +405,32 @@ func init() {
+ 		// } else {
+ 		//   return (false, memory)
+ 		// }
+-		// DBAR
+ 		// MOVV $0, Rout
+ 		// LL	(Rarg0), Rtmp
+ 		// BNE	Rtmp, Rarg1, 4(PC)
+ 		// MOVV Rarg2, Rout
+ 		// SC	Rout, (Rarg0)
+ 		// BEQ	Rout, -4(PC)
+-		// DBAR
+-		{name: "LoweredAtomicCas32", argLength: 4, reg: gpcas, resultNotInArgs: true, faultOnNilArg0: true, hasSideEffects: true, unsafePoint: true},
+-		{name: "LoweredAtomicCas64", argLength: 4, reg: gpcas, resultNotInArgs: true, faultOnNilArg0: true, hasSideEffects: true, unsafePoint: true},
++		// DBAR 0x700
++		{name: "LoweredAtomicCas32", argLength: 4, reg: amcas, resultNotInArgs: true, faultOnNilArg0: true, hasSideEffects: true, unsafePoint: true},
++		{name: "LoweredAtomicCas64", argLength: 4, reg: amcas, resultNotInArgs: true, faultOnNilArg0: true, hasSideEffects: true, unsafePoint: true},
++
++		// atomic compare and swap variant.
++		// arg0 = pointer, arg1 = old value, arg2 = new value, arg3 = memory. auxint must be zero.
++		// if *arg0 == arg1 {
++		//   *arg0 = arg2
++		//   return (true, memory)
++		// } else {
++		//   return (false, memory)
++		// }
++		// MOVV		$0, Rout
++		// MOVV		Rarg1, Rtmp
++		// AMCASDBx	Rarg2, (Rarg0), Rarg1
++		// BNE		Rarg1, Rtmp, 2(PC)
++		// MOVV		$1, Rout
++		// NOP
++		{name: "LoweredAtomicCas64Variant", argLength: 4, reg: amcas, resultNotInArgs: true, faultOnNilArg0: true, hasSideEffects: true, unsafePoint: true},
++		{name: "LoweredAtomicCas32Variant", argLength: 4, reg: amcas, resultNotInArgs: true, faultOnNilArg0: true, hasSideEffects: true, unsafePoint: true},
+ 
+ 		// pseudo-ops
+ 		{name: "LoweredNilCheck", argLength: 2, reg: regInfo{inputs: []regMask{gpg}}, nilCheck: true, faultOnNilArg0: true}, // panic if arg0 is nil.  arg1=mem.
+diff --git a/src/cmd/compile/internal/ssa/opGen.go b/src/cmd/compile/internal/ssa/opGen.go
+index ccc828e5bf..c7cf3c76b9 100644
+--- a/src/cmd/compile/internal/ssa/opGen.go
++++ b/src/cmd/compile/internal/ssa/opGen.go
+@@ -1848,6 +1848,8 @@ const (
+ 	OpLOONG64LoweredAtomicAdd64
+ 	OpLOONG64LoweredAtomicCas32
+ 	OpLOONG64LoweredAtomicCas64
++	OpLOONG64LoweredAtomicCas64Variant
++	OpLOONG64LoweredAtomicCas32Variant
+ 	OpLOONG64LoweredNilCheck
+ 	OpLOONG64FPFlagTrue
+ 	OpLOONG64FPFlagFalse
+@@ -24794,9 +24796,9 @@ var opcodeTable = [...]opInfo{
+ 		unsafePoint:     true,
+ 		reg: regInfo{
+ 			inputs: []inputInfo{
+-				{1, 1073741816},          // R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R18 R19 R20 R21 g R23 R24 R25 R26 R27 R28 R29 R31
+-				{2, 1073741816},          // R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R18 R19 R20 R21 g R23 R24 R25 R26 R27 R28 R29 R31
+-				{0, 4611686019501129724}, // SP R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R18 R19 R20 R21 g R23 R24 R25 R26 R27 R28 R29 R31 SB
++				{1, 522240},              // R12 R13 R14 R15 R16 R17 R18 R19
++				{2, 265814016},           // R20 R21 R23 R24 R25 R26 R27 R28
++				{0, 4611686018429487100}, // SP R4 R5 R6 R7 R8 R9 R10 R11 g SB
+ 			},
+ 			outputs: []outputInfo{
+ 				{0, 1071644664}, // R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R18 R19 R20 R21 R23 R24 R25 R26 R27 R28 R29 R31
+@@ -24812,9 +24814,45 @@ var opcodeTable = [...]opInfo{
+ 		unsafePoint:     true,
+ 		reg: regInfo{
+ 			inputs: []inputInfo{
+-				{1, 1073741816},          // R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R18 R19 R20 R21 g R23 R24 R25 R26 R27 R28 R29 R31
+-				{2, 1073741816},          // R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R18 R19 R20 R21 g R23 R24 R25 R26 R27 R28 R29 R31
+-				{0, 4611686019501129724}, // SP R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R18 R19 R20 R21 g R23 R24 R25 R26 R27 R28 R29 R31 SB
++				{1, 522240},              // R12 R13 R14 R15 R16 R17 R18 R19
++				{2, 265814016},           // R20 R21 R23 R24 R25 R26 R27 R28
++				{0, 4611686018429487100}, // SP R4 R5 R6 R7 R8 R9 R10 R11 g SB
++			},
++			outputs: []outputInfo{
++				{0, 1071644664}, // R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R18 R19 R20 R21 R23 R24 R25 R26 R27 R28 R29 R31
++			},
++		},
++	},
++	{
++		name:            "LoweredAtomicCas64Variant",
++		argLen:          4,
++		resultNotInArgs: true,
++		faultOnNilArg0:  true,
++		hasSideEffects:  true,
++		unsafePoint:     true,
++		reg: regInfo{
++			inputs: []inputInfo{
++				{1, 522240},              // R12 R13 R14 R15 R16 R17 R18 R19
++				{2, 265814016},           // R20 R21 R23 R24 R25 R26 R27 R28
++				{0, 4611686018429487100}, // SP R4 R5 R6 R7 R8 R9 R10 R11 g SB
++			},
++			outputs: []outputInfo{
++				{0, 1071644664}, // R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R18 R19 R20 R21 R23 R24 R25 R26 R27 R28 R29 R31
++			},
++		},
++	},
++	{
++		name:            "LoweredAtomicCas32Variant",
++		argLen:          4,
++		resultNotInArgs: true,
++		faultOnNilArg0:  true,
++		hasSideEffects:  true,
++		unsafePoint:     true,
++		reg: regInfo{
++			inputs: []inputInfo{
++				{1, 522240},              // R12 R13 R14 R15 R16 R17 R18 R19
++				{2, 265814016},           // R20 R21 R23 R24 R25 R26 R27 R28
++				{0, 4611686018429487100}, // SP R4 R5 R6 R7 R8 R9 R10 R11 g SB
+ 			},
+ 			outputs: []outputInfo{
+ 				{0, 1071644664}, // R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16 R17 R18 R19 R20 R21 R23 R24 R25 R26 R27 R28 R29 R31
+diff --git a/src/cmd/compile/internal/ssa/rewriteLOONG64.go b/src/cmd/compile/internal/ssa/rewriteLOONG64.go
+index 61cf6ec66f..3f7b5f9e1f 100644
+--- a/src/cmd/compile/internal/ssa/rewriteLOONG64.go
++++ b/src/cmd/compile/internal/ssa/rewriteLOONG64.go
+@@ -57,9 +57,14 @@ func rewriteValueLOONG64(v *Value) bool {
+ 		return rewriteValueLOONG64_OpAtomicAnd8(v)
+ 	case OpAtomicCompareAndSwap32:
+ 		return rewriteValueLOONG64_OpAtomicCompareAndSwap32(v)
++	case OpAtomicCompareAndSwap32Variant:
++		return rewriteValueLOONG64_OpAtomicCompareAndSwap32Variant(v)
+ 	case OpAtomicCompareAndSwap64:
+ 		v.Op = OpLOONG64LoweredAtomicCas64
+ 		return true
++	case OpAtomicCompareAndSwap64Variant:
++		v.Op = OpLOONG64LoweredAtomicCas64Variant
++		return true
+ 	case OpAtomicExchange32:
+ 		v.Op = OpLOONG64LoweredAtomicExchange32
+ 		return true
+@@ -781,6 +786,27 @@ func rewriteValueLOONG64_OpAtomicCompareAndSwap32(v *Value) bool {
+ 		return true
+ 	}
+ }
++func rewriteValueLOONG64_OpAtomicCompareAndSwap32Variant(v *Value) bool {
++	v_3 := v.Args[3]
++	v_2 := v.Args[2]
++	v_1 := v.Args[1]
++	v_0 := v.Args[0]
++	b := v.Block
++	typ := &b.Func.Config.Types
++	// match: (AtomicCompareAndSwap32Variant ptr old new mem)
++	// result: (LoweredAtomicCas32Variant ptr (SignExt32to64 old) new mem)
++	for {
++		ptr := v_0
++		old := v_1
++		new := v_2
++		mem := v_3
++		v.reset(OpLOONG64LoweredAtomicCas32Variant)
++		v0 := b.NewValue0(v.Pos, OpSignExt32to64, typ.Int64)
++		v0.AddArg(old)
++		v.AddArg4(ptr, v0, new, mem)
++		return true
++	}
++}
+ func rewriteValueLOONG64_OpAtomicOr8(v *Value) bool {
+ 	v_2 := v.Args[2]
+ 	v_1 := v.Args[1]
+diff --git a/src/cmd/compile/internal/ssagen/ssa.go b/src/cmd/compile/internal/ssagen/ssa.go
+index dba9a05b94..aff187f7fe 100644
+--- a/src/cmd/compile/internal/ssagen/ssa.go
++++ b/src/cmd/compile/internal/ssagen/ssa.go
+@@ -143,11 +143,12 @@ func InitConfig() {
+ 	ir.Syms.TypeAssert = typecheck.LookupRuntimeFunc("typeAssert")
+ 	ir.Syms.WBZero = typecheck.LookupRuntimeFunc("wbZero")
+ 	ir.Syms.WBMove = typecheck.LookupRuntimeFunc("wbMove")
+-	ir.Syms.X86HasPOPCNT = typecheck.LookupRuntimeVar("x86HasPOPCNT")       // bool
+-	ir.Syms.X86HasSSE41 = typecheck.LookupRuntimeVar("x86HasSSE41")         // bool
+-	ir.Syms.X86HasFMA = typecheck.LookupRuntimeVar("x86HasFMA")             // bool
+-	ir.Syms.ARMHasVFPv4 = typecheck.LookupRuntimeVar("armHasVFPv4")         // bool
+-	ir.Syms.ARM64HasATOMICS = typecheck.LookupRuntimeVar("arm64HasATOMICS") // bool
++	ir.Syms.X86HasPOPCNT = typecheck.LookupRuntimeVar("x86HasPOPCNT")         // bool
++	ir.Syms.X86HasSSE41 = typecheck.LookupRuntimeVar("x86HasSSE41")           // bool
++	ir.Syms.X86HasFMA = typecheck.LookupRuntimeVar("x86HasFMA")               // bool
++	ir.Syms.ARMHasVFPv4 = typecheck.LookupRuntimeVar("armHasVFPv4")           // bool
++	ir.Syms.ARM64HasATOMICS = typecheck.LookupRuntimeVar("arm64HasATOMICS")   // bool
++	ir.Syms.LOONG64HasLAMCAS = typecheck.LookupRuntimeVar("loong64HasLAMCAS") // bool
+ 	ir.Syms.Staticuint64s = typecheck.LookupRuntimeVar("staticuint64s")
+ 	ir.Syms.Typedmemmove = typecheck.LookupRuntimeFunc("typedmemmove")
+ 	ir.Syms.Udiv = typecheck.LookupRuntimeVar("udiv")                 // asm func with special ABI
+@@ -4471,14 +4472,14 @@ func InitTables() {
+ 			s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+ 			return s.newValue1(ssa.OpSelect0, types.Types[types.TBOOL], v)
+ 		},
+-		sys.AMD64, sys.Loong64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X)
++		sys.AMD64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X)
+ 	addF("internal/runtime/atomic", "Cas64",
+ 		func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+ 			v := s.newValue4(ssa.OpAtomicCompareAndSwap64, types.NewTuple(types.Types[types.TBOOL], types.TypeMem), args[0], args[1], args[2], s.mem())
+ 			s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
+ 			return s.newValue1(ssa.OpSelect0, types.Types[types.TBOOL], v)
+ 		},
+-		sys.AMD64, sys.Loong64, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X)
++		sys.AMD64, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X)
+ 	addF("internal/runtime/atomic", "CasRel",
+ 		func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
+ 			v := s.newValue4(ssa.OpAtomicCompareAndSwap32, types.NewTuple(types.Types[types.TBOOL], types.TypeMem), args[0], args[1], args[2], s.mem())
+@@ -4542,6 +4543,55 @@ func InitTables() {
+ 		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicOr32, ssa.OpAtomicOr32Variant, types.TNIL, types.TNIL, atomicAndOrEmitterARM64),
+ 		sys.ARM64)
+ 
++	makeAtomicCasGuardedIntrinsicLOONG64 := func(op0, op1 ssa.Op, typ, rtyp types.Kind, emit atomicOpEmitter) intrinsicBuilder {
++		return func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
++			// Target Atomic feature is identified by dynamic detection
++			addr := s.entryNewValue1A(ssa.OpAddr, types.Types[types.TBOOL].PtrTo(), ir.Syms.LOONG64HasLAMCAS, s.sb)
++			v := s.load(types.Types[types.TBOOL], addr)
++			b := s.endBlock()
++			b.Kind = ssa.BlockIf
++			b.SetControl(v)
++			bTrue := s.f.NewBlock(ssa.BlockPlain)
++			bFalse := s.f.NewBlock(ssa.BlockPlain)
++			bEnd := s.f.NewBlock(ssa.BlockPlain)
++			b.AddEdgeTo(bTrue)
++			b.AddEdgeTo(bFalse)
++			b.Likely = ssa.BranchLikely
++
++			// We have atomic instructions - use it directly.
++			s.startBlock(bTrue)
++			emit(s, n, args, op1, typ)
++			s.endBlock().AddEdgeTo(bEnd)
++
++			// Use original instruction sequence.
++			s.startBlock(bFalse)
++			emit(s, n, args, op0, typ)
++			s.endBlock().AddEdgeTo(bEnd)
++
++			// Merge results.
++			s.startBlock(bEnd)
++
++			if rtyp == types.TNIL {
++				return nil
++			} else {
++				return s.variable(n, types.Types[rtyp])
++			}
++		}
++	}
++
++	atomicCasEmitterLOONG64 := func(s *state, n *ir.CallExpr, args []*ssa.Value, op ssa.Op, typ types.Kind) {
++		v := s.newValue4(op, types.NewTuple(types.Types[types.TBOOL], types.TypeMem), args[0], args[1], args[2], s.mem())
++		s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
++		s.vars[n] = s.newValue1(ssa.OpSelect0, types.Types[typ], v)
++	}
++
++	addF("internal/runtime/atomic", "Cas",
++		makeAtomicCasGuardedIntrinsicLOONG64(ssa.OpAtomicCompareAndSwap32, ssa.OpAtomicCompareAndSwap32Variant, types.TUINT32, types.TBOOL, atomicCasEmitterLOONG64),
++		sys.Loong64)
++	addF("internal/runtime/atomic", "Cas64",
++		makeAtomicCasGuardedIntrinsicLOONG64(ssa.OpAtomicCompareAndSwap64, ssa.OpAtomicCompareAndSwap64Variant, types.TUINT64, types.TBOOL, atomicCasEmitterLOONG64),
++		sys.Loong64)
++
+ 	// Aliases for atomic load operations
+ 	alias("internal/runtime/atomic", "Loadint32", "internal/runtime/atomic", "Load", all...)
+ 	alias("internal/runtime/atomic", "Loadint64", "internal/runtime/atomic", "Load64", all...)
+diff --git a/src/cmd/compile/internal/typecheck/_builtin/runtime.go b/src/cmd/compile/internal/typecheck/_builtin/runtime.go
+index 3fee023afb..a08ae50d71 100644
+--- a/src/cmd/compile/internal/typecheck/_builtin/runtime.go
++++ b/src/cmd/compile/internal/typecheck/_builtin/runtime.go
+@@ -285,5 +285,6 @@ var x86HasSSE41 bool
+ var x86HasFMA bool
+ var armHasVFPv4 bool
+ var arm64HasATOMICS bool
++var loong64HasLAMCAS bool
+ 
+ func asanregisterglobals(unsafe.Pointer, uintptr)
+diff --git a/src/cmd/compile/internal/typecheck/builtin.go b/src/cmd/compile/internal/typecheck/builtin.go
+index e3ef360a03..e0d237b36e 100644
+--- a/src/cmd/compile/internal/typecheck/builtin.go
++++ b/src/cmd/compile/internal/typecheck/builtin.go
+@@ -233,6 +233,7 @@ var runtimeDecls = [...]struct {
+ 	{"x86HasFMA", varTag, 6},
+ 	{"armHasVFPv4", varTag, 6},
+ 	{"arm64HasATOMICS", varTag, 6},
++	{"loong64HasLAMCAS", varTag, 6},
+ 	{"asanregisterglobals", funcTag, 123},
+ }
+ 
+diff --git a/src/cmd/internal/goobj/builtinlist.go b/src/cmd/internal/goobj/builtinlist.go
+index fb729f512e..dbc6d0faee 100644
+--- a/src/cmd/internal/goobj/builtinlist.go
++++ b/src/cmd/internal/goobj/builtinlist.go
+@@ -116,6 +116,8 @@ var builtins = [...]struct {
+ 	{"runtime.chanrecv2", 1},
+ 	{"runtime.chansend1", 1},
+ 	{"runtime.closechan", 1},
++	{"runtime.chanlen", 1},
++	{"runtime.chancap", 1},
+ 	{"runtime.writeBarrier", 0},
+ 	{"runtime.typedmemmove", 1},
+ 	{"runtime.typedmemclr", 1},
+@@ -210,6 +212,7 @@ var builtins = [...]struct {
+ 	{"runtime.x86HasFMA", 0},
+ 	{"runtime.armHasVFPv4", 0},
+ 	{"runtime.arm64HasATOMICS", 0},
++	{"runtime.loong64HasLAMCAS", 0},
+ 	{"runtime.asanregisterglobals", 1},
+ 	{"runtime.deferproc", 1},
+ 	{"runtime.deferprocStack", 1},
+diff --git a/src/internal/cpu/cpu.go b/src/internal/cpu/cpu.go
+index efebfb079a..d8c9180fa7 100644
+--- a/src/internal/cpu/cpu.go
++++ b/src/internal/cpu/cpu.go
+@@ -77,9 +77,10 @@ var ARM64 struct {
+ // The booleans in Loong64 contain the correspondingly named cpu feature bit.
+ // The struct is padded to avoid false sharing.
+ var Loong64 struct {
+-	_        CacheLinePad
+-	HasCRC32 bool
+-	_        CacheLinePad
++	_         CacheLinePad
++	HasCRC32  bool // indicates that support CRC instruction
++	HasLAMCAS bool // indicates support AMCAS[_DB].{B/H/W/D}
++	_         CacheLinePad
+ }
+ 
+ var MIPS64X struct {
+diff --git a/src/internal/cpu/cpu_loong64.go b/src/internal/cpu/cpu_loong64.go
+index c4709cc158..3d51a62e9d 100644
+--- a/src/internal/cpu/cpu_loong64.go
++++ b/src/internal/cpu/cpu_loong64.go
+@@ -13,7 +13,10 @@ const CacheLinePadSize = 64
+ func doinit() {
+ 	options = []option{
+ 		{Name: "crc32", Feature: &Loong64.HasCRC32},
++		{Name: "amcas", Feature: &Loong64.HasLAMCAS},
+ 	}
+ 
+ 	osInit()
+ }
++
++func get_cpucfg(reg uint32) uint32
+diff --git a/src/internal/cpu/cpu_loong64.s b/src/internal/cpu/cpu_loong64.s
+new file mode 100644
+index 0000000000..f02a27803d
+--- /dev/null
++++ b/src/internal/cpu/cpu_loong64.s
+@@ -0,0 +1,12 @@
++// Copyright 2024 The Go Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style
++// license that can be found in the LICENSE file.
++
++#include "textflag.h"
++
++// func get_cpucfg(reg uint32) uint32
++TEXT ·get_cpucfg(SB), NOSPLIT|NOFRAME, $0-12
++	MOVW	reg+0(FP), R5
++	CPUCFG	R5, R4
++	MOVW	R4, ret+8(FP)
++	RET
+diff --git a/src/internal/cpu/cpu_loong64_hwcap.go b/src/internal/cpu/cpu_loong64_hwcap.go
+index b55fde6761..893875084a 100644
+--- a/src/internal/cpu/cpu_loong64_hwcap.go
++++ b/src/internal/cpu/cpu_loong64_hwcap.go
+@@ -23,8 +23,19 @@ func hwcapInit() {
+ 	// As of 2023, we do not know for sure if the CPUCFG data can be
+ 	// patched in software, nor does any known LoongArch kernel do that.
+ 	Loong64.HasCRC32 = isSet(HWCap, hwcap_LOONGARCH_CRC32)
++	Loong64.HasLAMCAS = isSetLAMCAS()
+ }
+ 
+ func isSet(hwc uint, value uint) bool {
+ 	return hwc&value != 0
+ }
++
++func isSetLAMCAS() bool {
++	reg := get_cpucfg(2)
++
++	if ((reg >> 28) & 0x1) == 1 {
++		return true
++	} else {
++		return false
++	}
++}
+diff --git a/src/internal/runtime/atomic/atomic_loong64.go b/src/internal/runtime/atomic/atomic_loong64.go
+index de6d4b4ba6..bce7a8f6e5 100644
+--- a/src/internal/runtime/atomic/atomic_loong64.go
++++ b/src/internal/runtime/atomic/atomic_loong64.go
+@@ -6,7 +6,14 @@
+ 
+ package atomic
+ 
+-import "unsafe"
++import (
++	"internal/cpu"
++	"unsafe"
++)
++
++const (
++	offsetLOONG64HasLAMCAS = unsafe.Offsetof(cpu.Loong64.HasLAMCAS)
++)
+ 
+ //go:noescape
+ func Xadd(ptr *uint32, delta int32) uint32
+diff --git a/src/internal/runtime/atomic/atomic_loong64.s b/src/internal/runtime/atomic/atomic_loong64.s
+index c4b6d836c7..488fb33523 100644
+--- a/src/internal/runtime/atomic/atomic_loong64.s
++++ b/src/internal/runtime/atomic/atomic_loong64.s
+@@ -2,6 +2,7 @@
+ // Use of this source code is governed by a BSD-style
+ // license that can be found in the LICENSE file.
+ 
++#include "go_asm.h"
+ #include "textflag.h"
+ 
+ // bool cas(uint32 *ptr, uint32 old, uint32 new)
+@@ -15,18 +16,31 @@ TEXT ·Cas(SB), NOSPLIT, $0-17
+ 	MOVV	ptr+0(FP), R4
+ 	MOVW	old+8(FP), R5
+ 	MOVW	new+12(FP), R6
+-	DBAR
++
++	MOVBU	internal∕cpu·Loong64+const_offsetLOONG64HasLAMCAS(SB), R8
++	BEQ	R8, cas_again
++	MOVV	R5, R7	// backup old value
++	AMCASDBW	R6, (R4), R5
++	BNE	R7, R5, cas_fail0
++	MOVV	$1, R4
++	MOVB	R4, ret+16(FP)
++	RET
++cas_fail0:
++	MOVB	R0, ret+16(FP)
++	RET
++
++	// Implemented using the ll-sc instruction pair
+ cas_again:
+ 	MOVV	R6, R7
+ 	LL	(R4), R8
+-	BNE	R5, R8, cas_fail
++	BNE	R5, R8, cas_fail1
+ 	SC	R7, (R4)
+ 	BEQ	R7, cas_again
+ 	MOVV	$1, R4
+ 	MOVB	R4, ret+16(FP)
+-	DBAR
++	DBAR	$0x14	// LoadAcquire barrier
+ 	RET
+-cas_fail:
++cas_fail1:
+ 	MOVV	$0, R4
+ 	JMP	-4(PC)
+ 
+@@ -42,21 +56,40 @@ TEXT ·Cas64(SB), NOSPLIT, $0-25
+ 	MOVV	ptr+0(FP), R4
+ 	MOVV	old+8(FP), R5
+ 	MOVV	new+16(FP), R6
+-	DBAR
++
++	MOVBU	internal∕cpu·Loong64+const_offsetLOONG64HasLAMCAS(SB), R8
++	BEQ	R8, cas64_again
++	MOVV	R5, R7	// backup old value
++	AMCASDBV	R6, (R4), R5
++	BNE	R7, R5, cas64_fail0
++	MOVV	$1, R4
++	MOVB	R4, ret+24(FP)
++	RET
++cas64_fail0:
++	MOVB	R0, ret+24(FP)
++	RET
++
++	// Implemented using the ll-sc instruction pair
+ cas64_again:
+ 	MOVV	R6, R7
+ 	LLV	(R4), R8
+-	BNE	R5, R8, cas64_fail
++	BNE	R5, R8, cas64_fail1
+ 	SCV	R7, (R4)
+ 	BEQ	R7, cas64_again
+ 	MOVV	$1, R4
+ 	MOVB	R4, ret+24(FP)
+-	DBAR
++	DBAR	$0x14
+ 	RET
+-cas64_fail:
++cas64_fail1:
+ 	MOVV	$0, R4
+ 	JMP	-4(PC)
+ 
++TEXT ·Casint32(SB),NOSPLIT,$0-17
++	JMP	·Cas(SB)
++
++TEXT ·Casint64(SB),NOSPLIT,$0-25
++	JMP	·Cas64(SB)
++
+ TEXT ·Casuintptr(SB), NOSPLIT, $0-25
+ 	JMP	·Cas64(SB)
+ 
+diff --git a/src/runtime/cpuflags.go b/src/runtime/cpuflags.go
+index bbe93c5bea..0113260adb 100644
+--- a/src/runtime/cpuflags.go
++++ b/src/runtime/cpuflags.go
+@@ -31,4 +31,6 @@ var (
+ 	armHasVFPv4 bool
+ 
+ 	arm64HasATOMICS bool
++
++	loong64HasLAMCAS bool
+ )
+diff --git a/src/runtime/proc.go b/src/runtime/proc.go
+index 56f97fa9f7..116b8dcd80 100644
+--- a/src/runtime/proc.go
++++ b/src/runtime/proc.go
+@@ -706,6 +706,9 @@ func cpuinit(env string) {
+ 
+ 	case "arm64":
+ 		arm64HasATOMICS = cpu.ARM64.HasATOMICS
++
++	case "loong64":
++		loong64HasLAMCAS = cpu.Loong64.HasLAMCAS
+ 	}
+ }
+ 
+-- 
+2.38.1
+
