@@ -1,0 +1,143 @@
+goos: linux
+goarch: loong64
+pkg: crypto/sha256
+cpu: Loongson-3A6000 @ 2500.00MHz
+                    │ sha256.old  │             sha256.new             │
+                    │   sec/op    │   sec/op     vs base               │
+Hash8Bytes/New-8      294.5n ± 0%   288.6n ± 0%  -2.00% (p=0.000 n=10)
+Hash8Bytes/Sum224-8   305.0n ± 0%   299.7n ± 0%  -1.74% (p=0.000 n=10)
+Hash8Bytes/Sum256-8   302.0n ± 0%   296.8n ± 0%  -1.74% (p=0.000 n=10)
+Hash1K/New-8          4.186µ ± 0%   4.096µ ± 0%  -2.15% (p=0.000 n=10)
+Hash1K/Sum224-8       4.193µ ± 0%   4.104µ ± 0%  -2.12% (p=0.000 n=10)
+Hash1K/Sum256-8       4.194µ ± 0%   4.108µ ± 0%  -2.04% (p=0.000 n=10)
+Hash8K/New-8          31.44µ ± 0%   30.76µ ± 0%  -2.17% (p=0.000 n=10)
+Hash8K/Sum224-8       31.45µ ± 0%   30.79µ ± 0%  -2.10% (p=0.000 n=10)
+Hash8K/Sum256-8       31.45µ ± 0%   30.78µ ± 0%  -2.12% (p=0.000 n=10)
+Hash256K/New-8        996.7µ ± 0%   975.6µ ± 0%  -2.12% (p=0.000 n=10)
+Hash256K/Sum224-8     996.8µ ± 0%   975.8µ ± 0%  -2.11% (p=0.000 n=10)
+Hash256K/Sum256-8     996.8µ ± 0%   975.6µ ± 0%  -2.12% (p=0.000 n=10)
+Hash1M/New-8          3.987m ± 0%   3.904m ± 0%  -2.08% (p=0.000 n=10)
+Hash1M/Sum224-8       3.990m ± 0%   3.902m ± 0%  -2.20% (p=0.000 n=10)
+Hash1M/Sum256-8       3.987m ± 0%   3.903m ± 0%  -2.10% (p=0.000 n=10)
+geomean               43.59µ        42.69µ       -2.06%
+
+                    │  sha256.old  │             sha256.new              │
+                    │     B/s      │     B/s       vs base               │
+Hash8Bytes/New-8      25.90Mi ± 0%   26.44Mi ± 0%  +2.06% (p=0.000 n=10)
+Hash8Bytes/Sum224-8   25.01Mi ± 0%   25.46Mi ± 0%  +1.77% (p=0.000 n=10)
+Hash8Bytes/Sum256-8   25.26Mi ± 0%   25.72Mi ± 0%  +1.79% (p=0.000 n=10)
+Hash1K/New-8          233.3Mi ± 0%   238.5Mi ± 0%  +2.19% (p=0.000 n=10)
+Hash1K/Sum224-8       232.9Mi ± 0%   238.0Mi ± 0%  +2.17% (p=0.000 n=10)
+Hash1K/Sum256-8       232.9Mi ± 0%   237.7Mi ± 0%  +2.07% (p=0.000 n=10)
+Hash8K/New-8          248.5Mi ± 0%   254.0Mi ± 0%  +2.22% (p=0.000 n=10)
+Hash8K/Sum224-8       248.4Mi ± 0%   253.7Mi ± 0%  +2.14% (p=0.000 n=10)
+Hash8K/Sum256-8       248.4Mi ± 0%   253.8Mi ± 0%  +2.17% (p=0.000 n=10)
+Hash256K/New-8        250.8Mi ± 0%   256.3Mi ± 0%  +2.17% (p=0.000 n=10)
+Hash256K/Sum224-8     250.8Mi ± 0%   256.2Mi ± 0%  +2.16% (p=0.000 n=10)
+Hash256K/Sum256-8     250.8Mi ± 0%   256.2Mi ± 0%  +2.17% (p=0.000 n=10)
+Hash1M/New-8          250.8Mi ± 0%   256.2Mi ± 0%  +2.12% (p=0.000 n=10)
+Hash1M/Sum224-8       250.6Mi ± 0%   256.3Mi ± 0%  +2.25% (p=0.000 n=10)
+Hash1M/Sum256-8       250.8Mi ± 0%   256.2Mi ± 0%  +2.14% (p=0.000 n=10)
+geomean               156.0Mi        159.3Mi       +2.11%
+
+                    │  sha256.old  │             sha256.new              │
+                    │     B/op     │    B/op     vs base                 │
+Hash8Bytes/New-8      0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash8Bytes/Sum224-8   0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash8Bytes/Sum256-8   0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash1K/New-8          0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash1K/Sum224-8       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash1K/Sum256-8       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash8K/New-8          0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash8K/Sum224-8       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash8K/Sum256-8       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash256K/New-8        0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash256K/Sum224-8     0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash256K/Sum256-8     0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash1M/New-8          0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash1M/Sum224-8       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash1M/Sum256-8       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                          ²               +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+
+                    │  sha256.old  │             sha256.new              │
+                    │  allocs/op   │ allocs/op   vs base                 │
+Hash8Bytes/New-8      0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash8Bytes/Sum224-8   0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash8Bytes/Sum256-8   0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash1K/New-8          0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash1K/Sum224-8       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash1K/Sum256-8       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash8K/New-8          0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash8K/Sum224-8       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash8K/Sum256-8       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash256K/New-8        0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash256K/Sum224-8     0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash256K/Sum256-8     0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash1M/New-8          0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash1M/Sum224-8       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash1M/Sum256-8       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                          ²               +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+goos: linux
+goarch: loong64
+pkg: crypto/sha512
+cpu: Loongson-3A6000 @ 2500.00MHz
+                    │ sha512.old  │             sha512.new             │
+                    │   sec/op    │   sec/op     vs base               │
+Hash8Bytes/New-8      397.2n ± 0%   380.6n ± 0%  -4.17% (p=0.000 n=10)
+Hash8Bytes/Sum384-8   406.1n ± 0%   397.9n ± 0%  -2.02% (p=0.000 n=10)
+Hash8Bytes/Sum512-8   410.1n ± 0%   395.8n ± 1%  -3.50% (p=0.000 n=10)
+Hash1K/New-8          2.932µ ± 0%   2.800µ ± 0%  -4.50% (p=0.000 n=10)
+Hash1K/Sum384-8       2.941µ ± 0%   2.812µ ± 0%  -4.39% (p=0.000 n=10)
+Hash1K/Sum512-8       2.947µ ± 0%   2.814µ ± 0%  -4.50% (p=0.000 n=10)
+Hash8K/New-8          20.68µ ± 0%   19.73µ ± 1%  -4.58% (p=0.000 n=10)
+Hash8K/Sum384-8       20.69µ ± 0%   19.73µ ± 0%  -4.62% (p=0.000 n=10)
+Hash8K/Sum512-8       20.70µ ± 0%   19.75µ ± 0%  -4.60% (p=0.000 n=10)
+geomean               2.908µ        2.789µ       -4.10%
+
+                    │  sha512.old  │             sha512.new              │
+                    │     B/s      │     B/s       vs base               │
+Hash8Bytes/New-8      19.21Mi ± 0%   20.05Mi ± 0%  +4.37% (p=0.000 n=10)
+Hash8Bytes/Sum384-8   18.79Mi ± 0%   19.18Mi ± 0%  +2.08% (p=0.000 n=10)
+Hash8Bytes/Sum512-8   18.60Mi ± 0%   19.28Mi ± 1%  +3.64% (p=0.000 n=10)
+Hash1K/New-8          333.1Mi ± 0%   348.8Mi ± 0%  +4.71% (p=0.000 n=10)
+Hash1K/Sum384-8       332.0Mi ± 0%   347.3Mi ± 0%  +4.60% (p=0.000 n=10)
+Hash1K/Sum512-8       331.5Mi ± 0%   347.0Mi ± 0%  +4.69% (p=0.000 n=10)
+Hash8K/New-8          377.8Mi ± 0%   396.0Mi ± 1%  +4.80% (p=0.000 n=10)
+Hash8K/Sum384-8       377.7Mi ± 0%   396.0Mi ± 0%  +4.85% (p=0.000 n=10)
+Hash8K/Sum512-8       377.5Mi ± 0%   395.7Mi ± 0%  +4.82% (p=0.000 n=10)
+geomean               133.3Mi        139.0Mi       +4.28%
+
+                    │  sha512.old  │             sha512.new              │
+                    │     B/op     │    B/op     vs base                 │
+Hash8Bytes/New-8      0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash8Bytes/Sum384-8   0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash8Bytes/Sum512-8   0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash1K/New-8          0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash1K/Sum384-8       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash1K/Sum512-8       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash8K/New-8          0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash8K/Sum384-8       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash8K/Sum512-8       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                          ²               +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                    │  sha512.old  │             sha512.new              │
+                    │  allocs/op   │ allocs/op   vs base                 │
+Hash8Bytes/New-8      0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash8Bytes/Sum384-8   0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash8Bytes/Sum512-8   0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash1K/New-8          0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash1K/Sum384-8       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash1K/Sum512-8       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash8K/New-8          0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash8K/Sum384-8       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+Hash8K/Sum512-8       0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                          ²               +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
